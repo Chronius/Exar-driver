@@ -1,6 +1,8 @@
 /*****************************************************************************/
 /*
-*      xr17v35x.c  -- EXAR multiport serial driver.
+*      RTSoft 2017 xr17v35x driver
+*
+*      xr17v35x.c  -- EXAR multiport serial driver for multiply cards.
 *
 *      Copyright (C) 2015 Exar Corporation.
 *
@@ -22,13 +24,11 @@
 *
 *
 *	   Multiport Serial Driver for EXAR's PCI Family of UARTs (XR17V258/254/252/358/354/352/8358/4358/8354)
-*								  (XR17D158/154/152)
 *       ChangeLog:
 *	   for			: LINUX 2.6.32 and newer (Tested on various kernel versions from 2.6.32 to 3.17.x)
-*	   date			: June 2016
-*	   version		: 2.2 
-*	 Note: Configure MPIO's as inputs.
-*	 Added an ioctl to support non standard baud rates 
+*	   date			: March 2015
+*	   version		: 2.0
+*
 *	Check Release Notes for information on what has changed in the new version.
 *
 */
@@ -80,6 +80,9 @@ struct serial_uart_config {
 };
 #endif
 
+// 1 - full | 0 - half duplex
+static int tty_mode;
+
 //void tty_flip_buffer_push(struct tty_port *port);
 
 /*
@@ -93,53 +96,32 @@ struct serial_uart_config {
 
 #define XR_MAJOR       30
 #define XR_MINOR       0
-/*	
-   Set this parameter to 1 to enable Debug mode
-   The Driver enables the internal loopback under debug mode
-   To disable internal loopback go to serialxr_set_termios
-*/
-#define DEBUG 		0
 
 /*
  * The special register set for XR17V35x UARTs.
  */
-#define	XR_17V35X_UART_DLD	        2
-#define	XR_17V35X_UART_MSR	        6
+#define	XR_17V35X_UART_DLD          2
+#define	XR_17V35X_UART_MSR          6
 #define XR_17V35X_EXTENDED_FCTR		8
 #define XR_17V35X_EXTENDED_EFR		9
 #define XR_17V35X_TXFIFO_CNT		10
 #define XR_17V35X_EXTENDED_TXTRG	10
 #define XR_17V35X_RXFIFO_CNT		11
 #define XR_17V35X_EXTENDED_RXTRG	11
-#define XR_17V35X_UART_XOFF2        	13 
-#define XR_17V35X_UART_XOFF1 		0xC0
-#define XR_17V35X_UART_XON1		0xE0
+#define XR_17V35X_UART_XOFF2        13 
+
 #define XR_17V35X_FCTR_RTS_8DELAY	0x03
 #define XR_17V35X_FCTR_TRGD		192
-#define XR_17V35x_FCTR_RS485	        0x20
-
-#define XR_17V35x_MPIOLVL_7_0       0x90
-#define XR_17V35x_MPIO3T_7_0        0x91
-#define XR_17V35x_MPIOSEL_7_0       0x93
-#define XR_17V35x_MPIOLVL_15_8       0x96
-#define XR_17V35x_MPIO3T_15_8        0x97
-#define XR_17V35x_MPIOSEL_15_8       0x99
-
-
-// Set this parameter to 0x01 to enable RS485 mode
-#define ENABLE_RS485		        0x00
-
-// Set this parameter to 1 to enabled internal loopback
-#define ENABLE_INTERNAL_LOOPBACK      0
+#define XR_17V35x_FCTR_RS485	0x20
 
 #define UART_17V35X_RX_OFFSET		0x100
 #define UART_17V35X_TX_OFFSET 		0x100
 
-#define	XR_17V35X_IER_RTSDTR	        0x40
-#define XR_17V35X_IER_CTSDSR	        0x80
+#define	XR_17V35X_IER_RTSDTR	0x40
+#define XR_17V35X_IER_CTSDSR	0x80
 
-#define XR_17V35X_8XMODE	        0x88
-#define XR_17V35X_4XMODE	        0x89
+#define XR_17V35X_8XMODE	    0x88
+#define XR_17V35X_4XMODE	    0x89
 
 #define DIVISOR_CHANGED   0
 
@@ -206,9 +188,6 @@ enum xrpci_board_num_t {
 	xr_258port,
 	xr_254port,
 	xr_252port,
-	xr_158port,
-	xr_154port,
-	xr_152port,
 };
 
 static struct pciserial_board xrpciserial_boards[] __devinitdata = {
@@ -293,31 +272,6 @@ static struct pciserial_board xrpciserial_boards[] __devinitdata = {
 		.reg_shift	= 0,
 		.first_offset	= 0,
 	},
-    	[xr_158port] = {
-		.flags		= FL_BASE0,
-		.num_ports	= 8,
-		.base_baud	= 921600,
-		.uart_offset	= 0x200,
-		.reg_shift	= 0,
-		.first_offset	= 0,
-	},
-	[xr_154port] = {
-		.flags		= FL_BASE0,
-		.num_ports	= 4,
-		.base_baud	= 921600,
-		.uart_offset	= 0x200,
-		.reg_shift	= 0,
-		.first_offset	= 0,
-	},
-	[xr_152port] = {
-		.flags		= FL_BASE0,
-		.num_ports	= 2,
-		.base_baud	= 921600,
-		.uart_offset	= 0x200,
-		.reg_shift	= 0,
-		.first_offset	= 0,
-	},
-
 };
 
 /*
@@ -337,7 +291,7 @@ unsigned int share_irqs = SERIALEXAR_SHARE_IRQS;
 #define DEBUG_AUTOCONF(fmt...)	do { } while (0)
 #endif
 
-#if DEBUG
+#if 0
 #define DEBUG_INTR(fmt...)	printk(fmt)
 #else
 #define DEBUG_INTR(fmt...)	do { } while (0)
@@ -372,7 +326,6 @@ struct uart_xr_port {
 	unsigned char		msr_saved_flags;
 	
 	unsigned short 		deviceid;
-	unsigned char		channelnum;
 	unsigned char       multidrop_address;
     unsigned char       multidrop_mode;
     unsigned char       is_match_address;
@@ -548,30 +501,6 @@ static struct pci_serial_quirk pci_serial_quirks[] = {
 		.subdevice	= PCI_ANY_ID,
 		.setup		= pci_default_setup,	
 	},
-		{
-		.vendor		= 0x13a8,
-		.device		= 0x158,
-		.subvendor	= PCI_ANY_ID,
-		.subdevice	= PCI_ANY_ID,
-		.setup		= pci_default_setup,	
-	},
-	
-	{
-		.vendor		= 0x13a8,
-		.device		= 0x154,
-		.subvendor	= PCI_ANY_ID,
-		.subdevice	= PCI_ANY_ID,
-		.setup		= pci_default_setup,	
-	},
-
-	{
-		.vendor		= 0x13a8,
-		.device		= 0x152,
-		.subvendor	= PCI_ANY_ID,
-		.subdevice	= PCI_ANY_ID,
-		.setup		= pci_default_setup,	
-	},
-
 };
 
 static inline int quirk_id_matches(u32 quirk_id, u32 dev_id)
@@ -650,11 +579,7 @@ receive_chars(struct uart_xr_port *up, unsigned int *status)
 	int i, datasize_in_fifo;
 	unsigned char tmp;		
 	datasize_in_fifo = serial_in(up, XR_17V35X_RXFIFO_CNT);
-	while(datasize_in_fifo!=serial_in(up, XR_17V35X_RXFIFO_CNT))
-	/*Read Receive Fifo count until we get read same value twice*/
-		datasize_in_fifo=serial_in(up, XR_17V35X_RXFIFO_CNT);
-
-    	int port_index = up->port.line;
+    int port_index = up->port.line;
 	flag = TTY_NORMAL;
   
 	if (unlikely(lsr & (UART_LSR_BI | UART_LSR_PE | UART_LSR_FE | UART_LSR_OE))) 
@@ -1093,7 +1018,7 @@ static unsigned int serialxr_get_mctrl(struct uart_port *port)
 static void serialxr_set_mctrl(struct uart_port *port, unsigned int mctrl)
 {
 	struct uart_xr_port *up = (struct uart_xr_port *)port;
-	unsigned char mcr = 0, efr;
+	unsigned char mcr = 0;
 
 	if (mctrl & TIOCM_RTS)
 		mcr |= UART_MCR_RTS;
@@ -1105,13 +1030,14 @@ static void serialxr_set_mctrl(struct uart_port *port, unsigned int mctrl)
 		mcr |= UART_MCR_OUT2;
 	if (mctrl & TIOCM_LOOP)
 		mcr |= UART_MCR_LOOP;
-
+	
+	if (tty_mode & UART_MCR_DTR)
+		mcr &= ~(UART_MCR_DTR);	//rs485
+	else
+		mcr |= (UART_MCR_DTR);	//rs422
+	// printk(KERN_INFO "\n MCR is set %x \n", mcr);
 	mcr = (mcr & up->mcr_mask) | up->mcr_force | up->mcr;
-	
-	efr = serial_in(up, UART_EFR); 
-	efr = efr & 0xEF;	// clear access to shaded registers so that write to MCR does not change from using DTR to RTS for RS-485 control
-	
-	serial_out(up, UART_EFR, efr);
+
 	serial_out(up, UART_MCR, mcr);
 }
 
@@ -1133,8 +1059,7 @@ static int serialxr_startup(struct uart_port *port)
 {
 	struct uart_xr_port *up = (struct uart_xr_port *)port;
 	unsigned long flags;
-	unsigned int fctr_reg=0;
-	int retval;
+int retval;
 
 	up->capabilities = uart_config[up->port.type].flags;
 
@@ -1156,20 +1081,22 @@ static int serialxr_startup(struct uart_port *port)
 		serial_out(up, XR_17V35X_EXTENDED_TXTRG, 32);
 	}
 
-	/* Hysteresis level of 8, Enable Auto RS-485 Mode */
-	fctr_reg=serial_in(up,XR_17V35X_EXTENDED_FCTR);
-	DEBUG_INTR(KERN_INFO "serialxr_startup: FCTR=0x%x",fctr_reg);
-#if ENABLE_RS485
-	serial_out(up, XR_17V35X_EXTENDED_FCTR, fctr_reg|XR_17V35X_FCTR_TRGD | XR_17V35X_FCTR_RTS_8DELAY | XR_17V35x_FCTR_RS485);
-#else
-	serial_out(up, XR_17V35X_EXTENDED_FCTR, fctr_reg|XR_17V35X_FCTR_TRGD | XR_17V35X_FCTR_RTS_8DELAY);
-#endif
-	serial_out(up, UART_MCR, 0x04);  //use DTR for Auto RS-485 Control
+	/* Hysteresis level of 8 */
 
+#ifndef RS485
+	serial_out(up, XR_17V35X_EXTENDED_FCTR, XR_17V35X_FCTR_TRGD | XR_17V35X_FCTR_RTS_8DELAY | 0x20); // FCTR_RS485
+	serial_out(up, UART_MCR, 0x04); // MCR[2] set 1 use DTR and DSR for auto hw flow control
+	printk(KERN_INFO "\n mode RS485 enable \n");
+#else
+	serial_out(up, XR_17V35X_EXTENDED_FCTR, XR_17V35X_FCTR_TRGD | XR_17V35X_FCTR_RTS_8DELAY);
+	serial_out(up, UART_MCR, 0); //MCR[2] is not set - Uses RTS and CTS 
+	printk(KERN_INFO "\n mode RS485 disable \n");
+#endif
 	serial_out(up, UART_LCR, 0);
+	//serial_out(up, UART_MCR, 0); //MCR[2] is not set - Uses RTS and CTS 
 
 	/* Wake up and initialize UART */
-	serial_out(up, XR_17V35X_EXTENDED_EFR, UART_EFR_ECB | 0x10/*Enable Shaded bits access*/);
+	serial_out(up, XR_17V35X_EXTENDED_EFR, UART_EFR_ECB | 0x10 | 0x40 /*Enable Shaded bits access*/);
 	serial_out(up,XR_17V35X_UART_MSR, 0);
 	serial_out(up, UART_IER, 0);
 	serial_out(up, UART_LCR, 0);
@@ -1284,7 +1211,6 @@ static unsigned int uart_get_divisor_exar(struct uart_port *port, unsigned int b
 	else
 		quot = DIV_ROUND_CLOSEST(port->uartclk, quot_coeff * baud);
 
-//	DEBUG_INTR(KERN_INFO "uart_get_divisor_exar:UartClk=%d QuotCoeff=0x%x",port->uartclk,quot_coeff);
 	return quot;
 }
 
@@ -1299,133 +1225,38 @@ static unsigned int serialxr_get_divisor(struct uart_port *port, unsigned int ba
 }
 
 static void
-serialxr_set_special_baudrate(struct uart_port *port,unsigned int special_baudrate)
-{
-	struct uart_xr_port *up = (struct uart_xr_port *)port;
-	signed int baud, quot, quot_fraction;
-	unsigned char val_4xmode;
-	unsigned char val_8xmode;
-	unsigned char lcr_bak;
-	unsigned int reg_read;
-	printk(KERN_INFO "Enter in serialxr_set non-standard baudrate:%d\n",special_baudrate);
-	int port_index = up->port.line;
-	baud = special_baudrate/*uart_get_baud_rate(port, termios, old, 0, port->uartclk/4)*/;
-    lcr_bak = serial_in(up, UART_LCR);
-	val_4xmode = serial_in(up, XR_17V35X_4XMODE);
-	val_8xmode = serial_in(up, XR_17V35X_8XMODE);
-	    	
-	if((port_index > 15)||(port_index < 0))
-	{
-	   return;
-	}
-	if(port_index >= 8) port_index = port_index - 8;
-		
-	if(baud < 12500000/16)
-	{//using the 16x mode
-	      val_4xmode &=~(1 << port_index);
-	      val_8xmode &=~(1 << port_index);	
-	      quot_coeff = 16;
-	      printk(KERN_INFO "Using the 16x Mode\n");
-	}
-	else if((baud >= 12500000/16)&&(baud < 12500000/4))
-	{//using the 8x mode
-	      val_4xmode &=~(1 << port_index);
-		  val_8xmode |=(1 << port_index);
-		  quot_coeff = 8;
-		  printk(KERN_INFO "Using the 8x Mode\n");
-	}
-	else 
-	{//using the 4x mode
-	   val_4xmode |=(1 << port_index);
-	   val_8xmode &=~(1 << port_index);
-	   quot_coeff = 4;
-	   printk(KERN_INFO "Using the 4x Mode\n");
-	}
-
-	serial_out(up, XR_17V35X_8XMODE, val_8xmode);
-	serial_out(up, XR_17V35X_4XMODE, val_4xmode);
-	DEBUG_INTR(KERN_INFO "XR_17V35X_4XMODE:%d \n",serial_in(up, XR_17V35X_4XMODE));
-	DEBUG_INTR(KERN_INFO "XR_17V35X_8XMODE:%d \n",serial_in(up, XR_17V35X_8XMODE));
-	
-	quot = serialxr_get_divisor(port, baud);
-	if(!((up->deviceid == 0x152)||(up->deviceid == 0x154)||(up->deviceid == 0x158)))
-	{
-	    DEBUG_INTR(KERN_INFO "XR_17V35X uartclk:%d Quot=0x%x\n",port->uartclk,quot);
-	    if((port->uartclk/baud) > (quot_coeff*quot))
-	    {	
-		if(quot_coeff==16)  quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot));
-		else if(quot_coeff==8) quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot))*2;
-		else if(quot_coeff==4) quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot))*4;
-	    }
-	    else if(quot > 1)
-	    {	
-	       quot--;
-	       if(quot_coeff==16)  quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot));
-	       else if(quot_coeff==8) quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot))*2;
-	       else if(quot_coeff==4) quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot))*4;
-
-	    }
-	    else
-	    {
-		quot_fraction = 0;
-	    }
-
-	    if(quot_fraction>=0x10) quot_fraction=0x0f;
-   }
-    serial_out(up, UART_LCR, lcr_bak | UART_LCR_DLAB);/* set DLAB */
-    serial_out(up, UART_DLL, quot & 0xff);		/* LS of divisor */
-    serial_out(up, UART_DLM, quot >> 8);		/* MS of divisor */
-	//Fractional baud rate support
-	if((up->deviceid == 0x152)||(up->deviceid == 0x154)||(up->deviceid == 0x158))
-	{
-	   //nothing to do , because these devices do not have support for the DLD register.
-	}
-	else
-	{
-	    reg_read=(serial_in(up, XR_17V35X_UART_DLD)&0xF0);
-	    DEBUG_INTR(KERN_INFO "serialxr_set_special_baudrate: quot =0x%x quot_fraction=0x%x DLD_reg=0x%x\n",quot,quot_fraction,reg_read);		
-	    serial_out(up, XR_17V35X_UART_DLD, quot_fraction | reg_read);
-	    reg_read=serial_in(up, XR_17V35X_UART_DLD);
-	 }
-	 serial_out(up, UART_LCR, lcr_bak);		/* reset DLAB */
-
-}
-
-static void
 serialxr_set_termios(struct uart_port *port, struct ktermios *termios,
 		       struct ktermios *old)
 {
-struct uart_xr_port *up = (struct uart_xr_port *)port;
-unsigned char cval;
-unsigned long flags;
-signed int baud, quot, quot_fraction;
-unsigned char val_4xmode;
-unsigned char val_8xmode;
-unsigned int reg_read;
+	struct uart_xr_port *up = (struct uart_xr_port *)port;
+	unsigned char cval;
+	unsigned long flags;
+	unsigned int baud, quot, quot_fraction;
+    unsigned char val_4xmode;
+	unsigned char val_8xmode;
 
-int port_index = up->port.line;
-switch (termios->c_cflag & CSIZE) 
-{
-case CS5:
+	int port_index = up->port.line;
+	switch (termios->c_cflag & CSIZE) {
+	case CS5:
 		cval = 0x00;
 		break;
-case CS6:
+	case CS6:
 		cval = 0x01;
 		break;
-case CS7:
+	case CS7:
 		cval = 0x02;
 		break;
-default:
-case CS8:
+	default:
+	case CS8:
 		cval = 0x03;
 		break;
-}
+	}
 
-if (termios->c_cflag & CSTOPB)
+	if (termios->c_cflag & CSTOPB)
 		cval |= 0x04;
-if (termios->c_cflag & PARENB)
+	if (termios->c_cflag & PARENB)
 		cval |= UART_LCR_PARITY;
-if (!(termios->c_cflag & PARODD))
+	if (!(termios->c_cflag & PARODD))
 		cval |= UART_LCR_EPAR;
 #ifdef CMSPAR
 	if (termios->c_cflag & CMSPAR)
@@ -1435,71 +1266,65 @@ if (!(termios->c_cflag & PARODD))
 	/*
 	 * Ask the core to calculate the divisor for us.
 	 */
-baud = uart_get_baud_rate(port, termios, old, 0, port->uartclk/4);
-
-printk(KERN_INFO "\nserialxr_set_termios: Port Index:%d c_ispeed:%d c_ospeed:%d baud=%d",port_index,termios->c_ispeed,termios->c_ospeed,baud);
-
-val_4xmode = serial_in(up, XR_17V35X_4XMODE);
-val_8xmode = serial_in(up, XR_17V35X_8XMODE);
+	baud = uart_get_baud_rate(port, termios, old, 0, port->uartclk/4);
+	printk(KERN_INFO "\nPort Index:%d c_ispeed:%d c_ospeed:%d baud=%d",port_index,termios->c_ispeed,termios->c_ospeed,baud);
+    val_4xmode = serial_in(up, XR_17V35X_4XMODE);
+	val_8xmode = serial_in(up, XR_17V35X_8XMODE);
     	
-if((port_index > 15)||(port_index < 0))
-{
-   return;
-}
-if(port_index >= 8) port_index = port_index - 8;
+	if((port_index > 15)||(port_index < 0))
+	{
+     	//return;
+	}
+	if(port_index >= 8) port_index = port_index - 8;
+	if(port_index >= 16) port_index = port_index - 16;
+	if(port_index >= 24) port_index = port_index - 24;
 	
-if(baud < 12500000/16)
-{//using the 16x mode
+
+
+    if (baud < 12500000/16)
+    {//using the 16x mode
       val_4xmode &=~(1 << port_index);
-      val_8xmode &=~(1 << port_index);	
-      quot_coeff = 16;
+	  val_8xmode &=~(1 << port_index);	
+	  quot_coeff = 16;
       printk(KERN_INFO "Using the 16x Mode\n");
-}
-else if((baud >= 12500000/16)&&(baud < 12500000/4))
-{//using the 8x mode
+    }
+    else if((baud >= 12500000/16)&&(baud < 12500000/4))
+    {//using the 8x mode
       val_4xmode &=~(1 << port_index);
 	  val_8xmode |=(1 << port_index);
 	  quot_coeff = 8;
 	  printk(KERN_INFO "Using the 8x Mode\n");
-}
-else 
-{//using the 4x mode
-   val_4xmode |=(1 << port_index);
-   val_8xmode &=~(1 << port_index);
-   quot_coeff = 4;
-   printk(KERN_INFO "Using the 4x Mode\n");
-}
-serial_out(up, XR_17V35X_8XMODE, val_8xmode);
-serial_out(up, XR_17V35X_4XMODE, val_4xmode);
-DEBUG_INTR(KERN_INFO "XR_17V35X_4XMODE:%d \n",serial_in(up, XR_17V35X_4XMODE));
-DEBUG_INTR(KERN_INFO "XR_17V35X_8XMODE:%d \n",serial_in(up, XR_17V35X_8XMODE));
+    }
+	else 
+	{//using the 4x mode
+	  val_4xmode |=(1 << port_index);
+	  val_8xmode &=~(1 << port_index);
+	  quot_coeff = 4;
+	  printk(KERN_INFO "Using the 4x Mode\n");
+	}
+
+	serial_out(up, XR_17V35X_8XMODE, val_8xmode);
+	serial_out(up, XR_17V35X_4XMODE, val_4xmode);
+	DEBUG_INTR(KERN_INFO "XR_17V35X_4XMODE:%d \n",serial_in(up, XR_17V35X_4XMODE));
+	DEBUG_INTR(KERN_INFO "XR_17V35X_8XMODE:%d \n",serial_in(up, XR_17V35X_8XMODE));
+	DEBUG_INTR(KERN_INFO "XR_17V35X uartclk:%d \n",port->uartclk);
 	
 	quot = serialxr_get_divisor(port, baud);
-	if(!((up->deviceid == 0x152)||(up->deviceid == 0x154)||(up->deviceid == 0x158)))
-	 {
-	    DEBUG_INTR(KERN_INFO "XR_17V35X uartclk:%d Quot=0x%x\n",port->uartclk,quot);
-	    //#ifdef DIVISOR_CHANGED
-	    if((port->uartclk/baud) > (quot_coeff*quot))
-	    {	
-		if(quot_coeff==16)  quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot));
-		else if(quot_coeff==8) quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot))*2;
-		else if(quot_coeff==4) quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot))*4;
-	    }
-	    else if(quot > 1)
-	    {	
-	       quot--;
-	       if(quot_coeff==16)  quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot));
-	       else if(quot_coeff==8) quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot))*2;
-	       else if(quot_coeff==4) quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot))*4;
-
-	    }
-	    else
-	    {
+	quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot));
+//#ifdef DIVISOR_CHANGED
+	if((port->uartclk/baud) > (quot_coeff*quot))
+	{	
+		quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot));
+	}
+	else if(quot > 1)
+	{	
+		quot--;
+		quot_fraction = ( (port->uartclk/baud) - (quot_coeff*quot));
+	}
+	else
+	{
 		quot_fraction = 0;
-	    }
-
-	    if(quot_fraction>=0x10) quot_fraction=0x0f;
-	 }
+	}
 //#endif	
 	/*
 	 * Ok, we're now changing the port state.  Do it with
@@ -1548,95 +1373,27 @@ DEBUG_INTR(KERN_INFO "XR_17V35X_8XMODE:%d \n",serial_in(up, XR_17V35X_8XMODE));
 		up->ier |= UART_IER_MSI;
 
 	serial_out(up, UART_IER, up->ier);
-	reg_read=serial_in(up, XR_17V35X_EXTENDED_EFR);
 
-	if(termios->c_cflag & CRTSCTS)
-	{
-	    serial_out(up, XR_17V35X_EXTENDED_EFR, reg_read|0xC0);
-	    printk(KERN_INFO "Hardware Flow Control Enabled");	    
-	}
-	 else
-	 {
-	       serial_out(up, XR_17V35X_EXTENDED_EFR, reg_read & 0x3F);
-	       printk(KERN_INFO "Hardware Flow Control Disabled\n");	    
-	 }
-	
-	/*
-	*	Auto XON/XOFF software flow control flags
-	*/
-	reg_read=serial_in(up, XR_17V35X_EXTENDED_EFR);
-	serial_out(up, XR_17V35X_UART_XON1,0x11); //Initializing XON1
-	serial_out(up, XR_17V35X_UART_XOFF1,0x13); //Initializing XOFF1
+	serial_out(up, XR_17V35X_EXTENDED_EFR, termios->c_cflag & CRTSCTS ? UART_EFR_CTS :0);
 
-	if(((termios->c_iflag) & IXOFF)&&((termios->c_iflag) & IXON))
-	{
-		serial_out(up, XR_17V35X_EXTENDED_EFR, (reg_read) | 0x0A );
-		printk(KERN_INFO "Software Flow Control Enabled\n");
-	}
-	else 
-	{
-		serial_out(up, XR_17V35X_EXTENDED_EFR, (reg_read) & 0xF0 );
-		printk(KERN_INFO "No Software Flow Control\n");
-	}	
-	if((termios->c_iflag) & IXANY)
-	{
-		serial_out(up, XR_17V35X_EXTENDED_EFR, ((termios->c_iflag) & IXOFF)||((termios->c_iflag) & IXON)?((reg_read) | 0x1A):((reg_read) | 0x10));
-		reg_read=serial_in(up, UART_MCR);
-		serial_out(up, UART_MCR, (reg_read) | 0x20 );
-		serial_out(up, XR_17V35X_EXTENDED_EFR, (reg_read) & 0xEF );
-		printk(KERN_INFO "AUTO XANY Enabled\n");
-	}
-	else 
-	{
-		serial_out(up, XR_17V35X_EXTENDED_EFR, (reg_read) | 0x10 );
-		reg_read=serial_in(up, UART_MCR);
-		serial_out(up, UART_MCR, (reg_read) & 0xDF );
-		reg_read=serial_in(up,XR_17V35X_EXTENDED_EFR);
-		serial_out(up, XR_17V35X_EXTENDED_EFR, (reg_read) & 0xEF );
-		printk(KERN_INFO "AUTO XANY NOT Enabled\n");
-	}
-	
-//---------------------------------------------------------------------------//
-	
+
+	tty_mode = (termios->c_cflag & CRTSCTS ? 1:0);
+	printk(KERN_INFO "Using mode %d  full(1)/half(0) - duplex\n", tty_mode);
+
+
 	serial_out(up, UART_LCR, cval | UART_LCR_DLAB);/* set DLAB */
 	
 	serial_out(up, UART_DLL, quot & 0xff);		/* LS of divisor */
 	serial_out(up, UART_DLM, quot >> 8);		/* MS of divisor */
-	//Fractional baud rate support
-	 if((up->deviceid == 0x152)||(up->deviceid == 0x154)||(up->deviceid == 0x158))
-	 {
-	   //nothing to do , because these devices do not have support for the DLD register.
-	 }
-	 else
-	 {
-	    reg_read=(serial_in(up, XR_17V35X_UART_DLD)&0xF0);
-	    DEBUG_INTR(KERN_INFO "serialxr_set_termios: quot =0x%x quot_fraction=0x%x DLD_reg=0x%x\n",quot,quot_fraction,reg_read);		
-	    serial_out(up, XR_17V35X_UART_DLD, quot_fraction | reg_read);
-	    reg_read=serial_in(up, XR_17V35X_UART_DLD);
-	 }
-	 serial_out(up, UART_LCR, cval);		/* reset DLAB */
-	 up->lcr = cval;						/* Save LCR */
+	//Fractional baud rate support		
+	serial_out(up, XR_17V35X_UART_DLD, quot_fraction & 0xf);
+    DEBUG_INTR(KERN_INFO "quot =0x%x quot_fraction=0x%x\n",quot,quot_fraction);
+	serial_out(up, UART_LCR, cval);		/* reset DLAB */
+	up->lcr = cval;					/* Save LCR */
 	
 	serial_out(up, UART_FCR, UART_FCR_ENABLE_FIFO);/* set fcr */
-	/*
-		Configuring MPIO as inputs
-	*/
-	if((up->deviceid == 0x354)||(up->deviceid == 0x4354)||(up->deviceid == 0x8354))
-	{
-		serial_out(up, XR_17V35x_MPIOSEL_7_0,0x0FF); //0x0ff= ALL INPUTS	
-	}
-	else if((up->deviceid == 0x358)||(up->deviceid == 0x4358)||(up->deviceid == 0x8358))
-	{
-		serial_out(up, XR_17V35x_MPIOSEL_7_0,0x0FF); //0x0ff= ALL INPUTS
-		serial_out(up, XR_17V35x_MPIOSEL_15_8,0x0FF); //0x0ff= ALL INPUTS
-	}
 	
 	serialxr_set_mctrl(&up->port, up->port.mctrl);
-#if ENABLE_INTERNAL_LOOPBACK
-	reg_read=serial_in(up, UART_MCR);
-	serial_out(up, UART_MCR, (reg_read) | 0x10);
-	printk(KERN_INFO "Enabling Internal Loopback\n");
-#endif
 	spin_unlock_irqrestore(&up->port.lock, flags);
 }
 
@@ -1650,8 +1407,6 @@ DEBUG_INTR(KERN_INFO "XR_17V35X_8XMODE:%d \n",serial_in(up, XR_17V35X_8XMODE));
 #define 	EXAR_SET_MULTIDROP_MODE_NORMAL   (FIOQSIZE + 3)
 #define 	EXAR_SET_MULTIDROP_MODE_AUTO     (FIOQSIZE + 4)
 #define 	EXAR_SET_REMOVE_MULTIDROP_MODE   (FIOQSIZE + 5)
-#define 	EXAR_SET_NON_STANDARD_BAUDRATE   (FIOQSIZE + 6)
-
 
 
 struct xrioctl_rw_reg {
@@ -1675,7 +1430,6 @@ serialxr_ioctl(struct uart_port *port, unsigned int cmd, unsigned long arg)
 	struct xrioctl_rw_reg ioctlrwarg;
     unsigned char address;
 	unsigned char tmp,lcr_bak,dld,efr;
-	unsigned int any_baudrate = 0;
 	switch (cmd)
 	{
 		case EXAR_READ_REG:
@@ -1806,13 +1560,6 @@ serialxr_ioctl(struct uart_port *port, unsigned int cmd, unsigned long arg)
 			up->is_match_address = 0;
 		    ret = 0;	
 		   
-		break;
-		case EXAR_SET_NON_STANDARD_BAUDRATE:
-		if (copy_from_user(&any_baudrate, (void *)arg, sizeof(unsigned int)))
-		{
-		   return -EFAULT;	
-		}
-		serialxr_set_special_baudrate(port,any_baudrate);
 		break;
 		
 	}
@@ -1964,7 +1711,7 @@ static struct uart_xr_port *serialxr_find_match_or_unused(struct uart_port *port
  *
  *	On success the port is ready to use and the line number is returned.
  */
-int serialxr_register_port(struct uart_port *port, unsigned short deviceid, unsigned char channelnum)
+int serialxr_register_port(struct uart_port *port, unsigned short deviceid)
 {
 	struct uart_xr_port *uart;
 	int ret = -ENOSPC;
@@ -1988,7 +1735,6 @@ int serialxr_register_port(struct uart_port *port, unsigned short deviceid, unsi
 			uart->port.dev = port->dev;
 
 		uart->deviceid = deviceid;
-		uart->channelnum = channelnum;
 		uart->port.line = port->line;
 		spin_lock_init(&uart->port.lock);
 
@@ -2083,11 +1829,7 @@ init_one_xrpciserialcard(struct pci_dev *dev, const struct pci_device_id *ent)
 
 	memset(&serial_port, 0, sizeof(struct uart_port));
 	serial_port.flags = UPF_SKIP_TEST | UPF_BOOT_AUTOCONF | UPF_SHARE_IRQ;
-
-	if((priv->dev->device == 0x152)	||(priv->dev->device == 0x154)||(priv->dev->device == 0x158))
-		serial_port.uartclk = board->base_baud * 16;
-	else
-		serial_port.uartclk = board->base_baud * 4;
+	serial_port.uartclk = board->base_baud * 4;
 	serial_port.irq = dev->irq;
 	serial_port.dev = &dev->dev;
 	for (i = 0; i < nr_ports; i++) {
@@ -2113,7 +1855,7 @@ init_one_xrpciserialcard(struct pci_dev *dev, const struct pci_device_id *ent)
 		    break;
 		}
 
-		rc = serialxr_register_port(&serial_port, dev->device,i);
+		rc = serialxr_register_port(&serial_port, dev->device);
 		if (rc < 0) {
 			printk(KERN_WARNING "Couldn't register serial port %s: %d\n", pci_name(dev), i);
 			break;
@@ -2234,16 +1976,6 @@ static struct pci_device_id xrserial_pci_tbl[] = {
 	{	0x13a8, 0x252,
 		PCI_ANY_ID, PCI_ANY_ID,
 		0, 0, xr_252port },
-	{	0x13a8, 0x158,
-		PCI_ANY_ID, PCI_ANY_ID,
-		0, 0, xr_158port },
-	{	0x13a8, 0x154,
-		PCI_ANY_ID, PCI_ANY_ID,
-		0, 0, xr_154port },
-	{	0x13a8, 0x152,
-		PCI_ANY_ID, PCI_ANY_ID,
-		0, 0, xr_152port },
-
 	{ 0, }
 };
 
@@ -2259,7 +1991,7 @@ static int __init serialxr_init(void)
 {
 	int ret;
 
-	printk(KERN_INFO "Exar PCIe (XR17V35x) serial driver Revision: 2.2\n");
+	printk(KERN_INFO "Exar PCIe (XR17V35x) serial driver Revision: 2.0\n");
 
 	ret = uart_register_driver(&xr_uart_driver);
 	if (ret)
@@ -2283,4 +2015,4 @@ module_init(serialxr_init);
 module_exit(serialxr_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Exar PCIe specific serial driver for XR17V35x- Revision: 2.2");
+MODULE_DESCRIPTION("Exar PCIe specific serial driver for XR17V35x- Revision: 2.0");

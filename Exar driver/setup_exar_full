@@ -1,0 +1,78 @@
+#!/bin/bash
+
+configureSerialPort() {
+	serialPort="$1"
+	baudRate="$2"
+
+	RS485_SETTINGS_1="1:0:18b2:0:3:1c:7f:15:4:5:1:0:11:13:1a:0:"
+	RS485_SETTINGS_2="12:f:17:16:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0"
+	RS485_SETTINGS="$RS485_SETTINGS_1$RS485_SETTINGS_2"
+
+	service ModemManager stop &>/dev/null
+	setserial -av "$serialPort" closing_wait 30 &>/dev/null
+
+	stty -F "$serialPort" "$RS485_SETTINGS" &>/dev/null
+	stty -F "$serialPort" "$RS485_SETTINGS"
+	stty -F "$serialPort" "$baudRate"  crtscts
+
+
+	#cat "$serialPort" > /dev/null 2>&1
+	if (( $? != 0 )); then
+		echo "ERROR: cant configure serial port \"$serialPort\"" | tee "$tmpDirectory"/errorFile
+		exit -1
+	fi
+
+}
+transmitt() {
+
+	#configureSerialPort /dev/ttyRTS24 $1	&
+	#configureSerialPort /dev/ttyRTS25 $1	&
+	
+	#return 
+
+	configureSerialPort /dev/ttyXR0 $1	&
+	configureSerialPort /dev/ttyXR1 $1	&
+	configureSerialPort /dev/ttyXR2 $1	&
+	configureSerialPort /dev/ttyXR3 $1	&
+	configureSerialPort /dev/ttyXR4 $1	&
+
+
+
+	configureSerialPort /dev/ttyXR4 $1 	&
+	configureSerialPort /dev/ttyXR5 $1	&
+	configureSerialPort /dev/ttyXR6 $1	&
+	configureSerialPort /dev/ttyXR7 $1	&
+
+	configureSerialPort /dev/ttyXR8 $1	&
+	configureSerialPort /dev/ttyXR9 $1	&
+	configureSerialPort /dev/ttyXR10 $1	&
+	configureSerialPort /dev/ttyXR11 $1	&
+
+	configureSerialPort /dev/ttyXR12 $1	&
+	configureSerialPort /dev/ttyXR13 $1	&
+	configureSerialPort /dev/ttyXR14 $1	&
+	configureSerialPort /dev/ttyXR15 $1	&
+
+	configureSerialPort /dev/ttyXR16 $1	&
+	configureSerialPort /dev/ttyXR17 $1	&
+	configureSerialPort /dev/ttyXR18 $1	&
+	configureSerialPort /dev/ttyXR19 $1	&
+
+	configureSerialPort /dev/ttyXR20 $1	&
+	configureSerialPort /dev/ttyXR21 $1	&
+	configureSerialPort /dev/ttyXR22 $1	&
+	configureSerialPort /dev/ttyXR23 $1	&
+
+	configureSerialPort /dev/ttyXR24 $1	&
+	configureSerialPort /dev/ttyXR25 $1	&
+	configureSerialPort /dev/ttyXR26 $1	&
+	configureSerialPort /dev/ttyXR27 $1	&
+
+	configureSerialPort /dev/ttyXR28 $1	&
+	configureSerialPort /dev/ttyXR29 $1	&
+	configureSerialPort /dev/ttyXR30 $1	&
+	configureSerialPort /dev/ttyXR31 $1	&
+}
+
+transmitt $1
+
