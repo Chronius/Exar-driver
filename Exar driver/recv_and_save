@@ -1,0 +1,46 @@
+#!/bin/bash
+
+WAIT_TO_REC=10
+
+configureSerialPort() {
+	serialPort="$1"
+	baudRate="$2"
+	#echo " config stty $baudRate  $serialPort"
+	RS485_SETTINGS_1="1:0:18b2:0:3:1c:7f:15:4:5:1:0:11:13:1a:0:"
+	RS485_SETTINGS_2="12:f:17:16:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0"
+	RS485_SETTINGS="$RS485_SETTINGS_1$RS485_SETTINGS_2"
+
+	service ModemManager stop &>/dev/null
+	setserial -av "$serialPort" closing_wait 3000 &>/dev/null
+
+	stty -F "$serialPort" "$RS485_SETTINGS" &>/dev/null
+	stty -F "$serialPort" "$RS485_SETTINGS"
+	stty -F "$serialPort" "$baudRate" -crtscts
+	
+	touch "$PWD"/tmp/data_from_"$(basename $port)"
+	fileToRead="$PWD"/tmp/data_from_"$(basename $port)"
+	
+	
+
+	cat "$serialPort" > "$fileToRead" &
+	catPid="$!"
+	sleep $WAIT_TO_REC #20
+	kill -13 "$catPid" &>/dev/null
+	echo "kill process"
+	if (( $? != 0 )); then
+		echo "ERROR: cant configure serial port \"$serialPort\"" | tee "$tmpDirectory"/errorFile
+		exit -1
+	fi
+}
+
+echo "For break Ctrl+C"
+
+baudRate="$1"
+
+rm  "$PWD"/tmp/*
+for port in /dev/ttyXR*; do
+	echo "Cat data from $port , baudrate $1"
+	configureSerialPort "$port" "$baudRate" &
+done
+wait
+echo "test done"
